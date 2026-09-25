@@ -22,22 +22,24 @@
   <title>N8N Mentat</title>
   <link rel="stylesheet" href="sdk/ui/base.css">
   <link rel="stylesheet" href="app.css">
+  <!-- Before the inline script below, which builds the flow at parse time. -->
+  <script src="sdk/ui/steps.js"></script>
+  <script src="sdk/ui/modal.js"></script>
 </head>
 <body>
 
 <div class="top-bar">
   <span class="top-bar__title">N8N Mentat</span>
   <div class="top-bar__spacer"></div>
+  <button type="button" class="top-bar__icon" id="icon-tunnel">Tunnel</button>
+  <button type="button" class="top-bar__icon" id="icon-faq">FAQ</button>
 </div>
 
-<div class="tab-bar">
-  <button class="active" data-tab="n8n">N8N Localhost</button>
-  <button data-tab="mcp">Claude Code MCP</button>
-  <button data-tab="tunnel">Cloudflare Tunnel</button>
-  <button data-tab="faq">FAQ</button>
-</div>
+<!-- One screen. The sequential part is the accordion; the tunnel and the FAQ
+     are reference material and open from the header. -->
+<div id="flow"></div>
 
-<div class="tab-content">
+<div class="tab-content" id="content-source" hidden>
   <!-- Tab 1: n8n -->
   <div id="tab-n8n" class="panel active">
     <div id="n8n-loading" class="loading-overlay">
@@ -290,15 +292,45 @@
 <script src="sdk/ui/update-bar.js"></script>
 
 <script>
-  // Tab switching
-  document.querySelectorAll('.tab-bar button').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-bar button').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    });
+  // ── The flow ──
+  //
+  // Two steps, not four tabs. The MCP server is only worth connecting once n8n
+  // is actually running, which the tab bar could not say.
+  const flow = HexKit.createSteps(document.getElementById('flow'), {
+    steps: [
+      { id: 'engine', title: 'n8n', hint: 'Installs and starts n8n on localhost:5678' },
+      { id: 'mcp',    title: 'Connect Claude Code', hint: 'MCP server and skills so Claude can drive n8n' },
+    ],
   });
+
+  // Moved, not rebuilt: every id and handler inside these panels keeps working.
+  flow.body('engine').appendChild(document.getElementById('tab-n8n'));
+  flow.body('mcp').appendChild(document.querySelector('#tab-mcp .panel-scroll'));
+  document.getElementById('tab-n8n').classList.add('active');
+  // Step 1's body hosts the n8n interface, so it needs real height rather than
+  // sizing to its collapsed content.
+  flow.body('engine').classList.add('steps__body--fill');
+
+  const faqBody    = document.querySelector('#tab-faq .panel-scroll');
+  const tunnelBody = document.querySelector('#tab-tunnel .panel-scroll');
+  document.getElementById('icon-faq').addEventListener('click',
+    () => HexKit.openModal({ title: 'FAQ', content: faqBody }));
+  document.getElementById('icon-tunnel').addEventListener('click',
+    () => HexKit.openModal({ title: 'Cloudflare Tunnel', content: tunnelBody }));
+
+  // Step 2 is reachable from the start but must not steal the screen: setting a
+  // step active is what makes its header clickable, and it also opens it, so
+  // re-open step 1 straight after.
+  flow.setState('mcp', 'active');
+  flow.open('engine');
+
+  // Unlike a setup step, step 1 does not collapse when it finishes — it CONTAINS
+  // the n8n interface, so "done" means "here is the thing you came for".
+  function engineReady() {
+    flow.setState('engine', 'done');
+    flow.setNote('engine', 'Running');
+    flow.open('engine');
+  }
 
   // n8n loading — listen for progress from main process, poll for HTTP readiness
   const n8nFrame = document.getElementById('n8n-frame');
@@ -365,8 +397,8 @@
         }
         setProgress(100, 'Loading interface...', 'Connected to n8n');
         n8nFrame.src = 'http://localhost:5678/';
-        n8nFrame.addEventListener('load', () => n8nLoading.classList.add('hidden'), { once: true });
-        setTimeout(() => n8nLoading.classList.add('hidden'), 5000);
+        n8nFrame.addEventListener('load', () => { n8nLoading.classList.add('hidden'); engineReady(); }, { once: true });
+        setTimeout(() => { n8nLoading.classList.add('hidden'); engineReady(); }, 5000);
         return;
       }
     } catch {
@@ -399,7 +431,7 @@
   async function loadStatus() {
     try {
       const s = await window.electronAPI.mcpStatus();
-      if (s.mcpInstalled) { setDot('mcp-dot', 'green'); toggle('mcp-uninstall-btn', 'mcp-install-btn'); }
+      if (s.mcpInstalled) { setDot('mcp-dot', 'green'); toggle('mcp-uninstall-btn', 'mcp-install-btn'); flow.setNote('mcp', 'Connected'); }
       else { setDot('mcp-dot', 'red'); toggle('mcp-install-btn', 'mcp-uninstall-btn'); }
       setDot('skills-dot', s.skillsInstalled ? 'green' : 'red');
       if (s.skillsInstalled) document.getElementById('skills-btn').textContent = 'Reinstall n8n Skills';
